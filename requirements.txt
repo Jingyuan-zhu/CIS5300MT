@@ -1,0 +1,5 @@
+pandas>=2.1
+pyarrow>=12.0
+sacrebleu>=2.4
+unbabel-comet>=2.2
+
