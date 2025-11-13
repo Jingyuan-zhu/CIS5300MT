@@ -3,6 +3,10 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Model and tokenizer artifacts
+artifacts/
+outputs/
+*.pt
 # C extensions
 *.so
 

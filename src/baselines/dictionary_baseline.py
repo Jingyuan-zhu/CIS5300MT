@@ -7,6 +7,7 @@ import json
 import re
 import string
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence
 import xml.etree.ElementTree as ET
@@ -14,6 +15,7 @@ import xml.etree.ElementTree as ET
 import pandas as pd
 
 from src.utils.data import load_translation_parquet
+from src.utils.logging import setup_logger
 
 
 TokenDictionary = Mapping[str, str]
@@ -114,6 +116,10 @@ def run_dictionary_baseline(args: argparse.Namespace) -> None:
     if not args.case_sensitive:
         lexicon = {key.lower(): value for key, value in lexicon.items()}
 
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    logger = setup_logger("dictionary_baseline", Path("logs/dictionary_baseline"), timestamp)
+    logger.info("Running dictionary baseline with %d input rows.", len(input_df))
+
     translator = DictionaryTranslator(
         lexicon,
         DictionaryConfig(
@@ -123,6 +129,7 @@ def run_dictionary_baseline(args: argparse.Namespace) -> None:
             allow_identity_fallback=not args.no_identity_fallback,
         ),
     )
+    logger.info("Loaded dictionary with %d entries.", len(lexicon))
 
     source_sentences = input_df["source"].astype(str).tolist()
     predictions = [translator.translate(sentence) for sentence in source_sentences]
@@ -137,9 +144,16 @@ def run_dictionary_baseline(args: argparse.Namespace) -> None:
     if "target" in input_df.columns:
         output_df["target"] = input_df["target"]
 
-    output_path = Path(args.output)
+    if args.output:
+        output_path = Path(args.output)
+    else:
+        output_dir = Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / f"predictions_{timestamp}.{args.output_format}"
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     _write_output(output_df, output_path)
+    logger.info("Wrote predictions to %s", output_path)
 
 
 def _write_output(df: pd.DataFrame, path: Path) -> None:
@@ -184,7 +198,21 @@ def _clean_dictionary_target(text: str) -> str:
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run dictionary-based translation baseline.")
     parser.add_argument("--input", required=True, help="Path to the evaluation dataset parquet file.")
-    parser.add_argument("--output", required=True, help="Where to store the generated translations.")
+    parser.add_argument(
+        "--output",
+        help="Optional explicit output file path. Overrides --output-dir and --output-format.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default="outputs/dictionary_baseline",
+        help="Directory to store timestamped prediction files.",
+    )
+    parser.add_argument(
+        "--output-format",
+        default="parquet",
+        choices=["parquet", "csv", "tsv", "json", "jsonl"],
+        help="File format for the predictions when --output is not provided.",
+    )
     parser.add_argument("--dictionary", required=True, help="Path to a bilingual dictionary (json/csv/tsv/xml).")
     parser.add_argument("--source-lang", default="en", help="Source language key.")
     parser.add_argument("--target-lang", default="es", help="Target language key.")
