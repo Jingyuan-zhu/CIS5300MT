@@ -30,19 +30,33 @@ Each run writes timestamped prediction files under `outputs/dictionary_baseline/
 
 ### Seq2Seq LSTM Baseline
 
-Simple unidirectional LSTM baseline with Helsinki-NLP tokenizer. Hardware settings auto-configure:
+Simple unidirectional LSTM baseline with Helsinki-NLP tokenizer. Auto-configures hardware and uses 200k samples by default for fair comparison:
 
 ```bash
 python -m src.baselines.train_seq2seq --auto-config
 ```
 
-Common options (all optional, sensible defaults provided):
+Common options:
 
 ```bash
-python -m src.baselines.train_seq2seq --epochs 20 --learning-rate 1e-3 --batch-size 128
+# Custom training size and hyperparameters
+python -m src.baselines.train_seq2seq --max-train-samples 500000 --epochs 20 --learning-rate 1e-3
+
+# Full dataset (1M examples)
+python -m src.baselines.train_seq2seq --max-train-samples 1000000 --batch-size 128
 ```
 
-Each run creates a timestamped directory under `outputs/seq2seq_lstm/` with model, metrics, predictions, and logs.
+Each run creates a timestamped directory under `outputs/seq2seq_lstm/` containing:
+- `best_model.pt`, `run_config.json`
+- `training_history_<timestamp>.csv` and `.png` (training curves)
+- `dev_metrics_<timestamp>.json`, `test_predictions_<timestamp>.parquet`, `test_metrics_<timestamp>.json`
+- Logs in `logs/seq2seq_lstm/<timestamp>.log`
+
+**Plot training history manually:**
+
+```bash
+python -m src.utils.plot_training outputs/seq2seq_lstm/<timestamp>/training_history_<timestamp>.csv
+```
 
 ## Evaluation
 

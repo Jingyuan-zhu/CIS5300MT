@@ -81,6 +81,32 @@ def make_parallel_corpus(
     return list(df[[source_column, target_column]].itertuples(index=False, name=None))
 
 
+def sample_dataframe(
+    df: pd.DataFrame,
+    n_samples: int,
+    random_seed: int = 42,
+) -> pd.DataFrame:
+    """Randomly sample n rows from a DataFrame with fixed seed for reproducibility.
+    
+    Parameters
+    ----------
+    df:
+        Input DataFrame to sample from.
+    n_samples:
+        Number of samples to draw. If >= len(df), returns full DataFrame.
+    random_seed:
+        Random seed for reproducibility across models (default: 42).
+    
+    Returns
+    -------
+    pandas.DataFrame
+        Sampled DataFrame with n_samples rows (or fewer if df is smaller).
+    """
+    if n_samples >= len(df):
+        return df
+    return df.sample(n=n_samples, random_state=random_seed).reset_index(drop=True)
+
+
 def _ensure_mapping(value: object) -> dict:
     if isinstance(value, dict):
         return value

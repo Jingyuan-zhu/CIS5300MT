@@ -6,4 +6,5 @@ torch>=2.2
 transformers>=4.38
 sentencepiece>=0.1.99
 tqdm>=4.65
+matplotlib>=3.7
 

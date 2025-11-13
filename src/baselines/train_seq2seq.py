@@ -20,8 +20,9 @@ from src.data.translation_dataset import SequenceBatch, TranslationDataset, coll
 from src.evaluation.metrics import corpus_bleu, corpus_chrf
 from src.tokenizers import ensure_tokenizer
 from src.utils.auto_config import auto_configure, print_hardware_info
-from src.utils.data import load_translation_parquet, make_parallel_corpus
+from src.utils.data import load_translation_parquet, make_parallel_corpus, sample_dataframe
 from src.utils.logging import setup_logger
+from src.utils.plot_training import plot_training_history
 
 
 def parse_args() -> argparse.Namespace:
@@ -35,6 +36,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--patience", type=int, default=3, help="Early stopping patience")
     parser.add_argument("--batch-size", type=int, default=None, help="Batch size (auto if None)")
     parser.add_argument("--eval-batch-size", type=int, default=None, help="Eval batch size (auto if None)")
+    parser.add_argument("--max-train-samples", type=int, default=200000, 
+                       help="Max training samples for fair comparison (default: 200k, seed=42)")
     
     # Data paths
     parser.add_argument("--train-path", default="data/train_set.parquet", help="Training data")
@@ -196,6 +199,14 @@ def train() -> None:
 
     train_df = load_translation_parquet(args.train_path)
     dev_df = load_translation_parquet(args.dev_path)
+    
+    # Sample training data for fair comparison across models (fixed seed)
+    original_train_size = len(train_df)
+    if args.max_train_samples and args.max_train_samples < original_train_size:
+        train_df = sample_dataframe(train_df, args.max_train_samples, random_seed=42)
+        logger.info(f"Sampled {len(train_df):,} from {original_train_size:,} training examples (seed=42)")
+    else:
+        logger.info(f"Using all {original_train_size:,} training examples")
 
     train_pairs = make_parallel_corpus(train_df)
     dev_pairs = make_parallel_corpus(dev_df)
@@ -269,6 +280,9 @@ def train() -> None:
     patience_counter = 0
     best_epoch = 0
     model_path = run_dir / "best_model.pt"
+    
+    # Training history tracking
+    training_history = []
 
     for epoch in range(1, args.epochs + 1):
         train_loss = run_epoch(
@@ -297,6 +311,15 @@ def train() -> None:
         )
         dev_bleu = dev_metrics["bleu"]
         dev_chrf = dev_metrics["chrf"]
+        
+        # Record training history
+        training_history.append({
+            "epoch": epoch,
+            "train_loss": train_loss,
+            "val_loss": val_loss,
+            "dev_bleu": dev_bleu,
+            "dev_chrf": dev_chrf,
+        })
 
         logger.info(
             "Epoch %d | train_loss=%.4f | val_loss=%.4f | dev_bleu=%.2f | dev_chrf=%.2f",
@@ -361,6 +384,19 @@ def train() -> None:
     with dev_metrics_path.open("w", encoding="utf-8") as fh:
         json.dump(best_dev_metrics, fh, indent=2)
     logger.info("Stored development metrics at %s", dev_metrics_path)
+    
+    # Save training history
+    history_df = pd.DataFrame(training_history)
+    history_csv_path = run_dir / f"training_history_{timestamp}.csv"
+    history_df.to_csv(history_csv_path, index=False)
+    logger.info(f"Saved training history to {history_csv_path}")
+    
+    # Generate training plots
+    try:
+        plot_training_history(history_csv_path)
+        logger.info(f"Generated training plot: {history_csv_path.with_suffix('.png')}")
+    except Exception as e:
+        logger.warning(f"Could not generate training plot: {e}")
 
     if test_loader is not None:
         test_metrics, sources, predictions, references = evaluate_metrics(
