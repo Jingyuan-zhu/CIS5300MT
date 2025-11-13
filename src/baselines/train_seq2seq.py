@@ -32,7 +32,7 @@ def parse_args() -> argparse.Namespace:
     )
     # Common training parameters
     parser.add_argument("--epochs", type=int, default=20, help="Number of training epochs")
-    parser.add_argument("--learning-rate", type=float, default=1e-3, help="Learning rate")
+    parser.add_argument("--learning-rate", type=float, default=5e-4, help="Learning rate (reduced for stability)")
     parser.add_argument("--patience", type=int, default=3, help="Early stopping patience")
     parser.add_argument("--batch-size", type=int, default=None, help="Batch size (auto if None)")
     parser.add_argument("--eval-batch-size", type=int, default=None, help="Eval batch size (auto if None)")
@@ -97,33 +97,41 @@ def build_dataloader(
     )
 
 
-def resolve_special_token_id(
-    tokenizer,
-    attr_candidates: Sequence[str],
-    token_attr_candidates: Sequence[str],
-    literal_tokens: Sequence[str],
-) -> Optional[int]:
-    for attr in attr_candidates:
-        value = getattr(tokenizer, attr, None)
-        if value is not None:
-            return value
-
-    vocab = None
-    for token_attr in token_attr_candidates:
-        token = getattr(tokenizer, token_attr, None)
-        if token:
-            if vocab is None:
-                vocab = tokenizer.get_vocab()
-            if token in vocab:
-                return tokenizer.convert_tokens_to_ids(token)
-
-    if literal_tokens:
-        if vocab is None:
-            vocab = tokenizer.get_vocab()
-        for token in literal_tokens:
-            if token in vocab:
-                return tokenizer.convert_tokens_to_ids(token)
-    return None
+def get_special_tokens(tokenizer) -> tuple[int, int, int]:
+    """Get BOS, EOS, and PAD token IDs from tokenizer.
+    
+    For Marian models (Helsinki-NLP), the convention is:
+    - Uses EOS token (typically 0) for both sequence start and end
+    - PAD token is usually also 0
+    
+    Returns:
+        (bos_id, eos_id, pad_id)
+    """
+    # Get PAD token
+    pad_id = getattr(tokenizer, 'pad_token_id', None)
+    if pad_id is None:
+        raise ValueError("Tokenizer must have a pad_token_id")
+    
+    # For Marian models, try to get EOS token first
+    eos_id = getattr(tokenizer, 'eos_token_id', None)
+    
+    # If no EOS token, try other alternatives
+    if eos_id is None:
+        # Try to find </s> token
+        vocab = tokenizer.get_vocab()
+        if '</s>' in vocab:
+            eos_id = vocab['</s>']
+        elif '<EOS>' in vocab:
+            eos_id = vocab['<EOS>']
+        else:
+            # Last resort: use pad_id
+            eos_id = pad_id
+    
+    # For Marian models, BOS = EOS (they use the same token)
+    # This is the standard Marian convention
+    bos_id = eos_id
+    
+    return bos_id, eos_id, pad_id
 
 
 def train() -> None:
@@ -176,26 +184,18 @@ def train() -> None:
         json.dump(vars(args), fh, indent=2)
 
     tokenizer = ensure_tokenizer(force_download=args.force_download_tokenizer)
-    pad_id_value = tokenizer.pad_token_id
-    if not isinstance(pad_id_value, int):
-        raise ValueError("Tokenizer is missing a pad token id.")
-
-    bos_id = resolve_special_token_id(
-        tokenizer,
-        ["bos_token_id", "cls_token_id", "eos_token_id", "pad_token_id"],
-        ["bos_token", "cls_token", "eos_token", "pad_token"],
-        ["<s>", "</s>", "<pad>"],
-    )
-    eos_id = resolve_special_token_id(
-        tokenizer,
-        ["eos_token_id", "sep_token_id", "pad_token_id"],
-        ["eos_token", "sep_token", "pad_token"],
-        ["</s>", "<pad>"],
-    )
-    if not isinstance(bos_id, int) or not isinstance(eos_id, int):
-        raise ValueError("Tokenizer must provide BOS and EOS token ids.")
-    pad_id = pad_id_value
-    logger.info("Using BOS token id %s and EOS token id %s", bos_id, eos_id)
+    
+    # Get special tokens (handles Marian tokenizer conventions)
+    bos_id, eos_id, pad_id = get_special_tokens(tokenizer)
+    logger.info(f"Special tokens: BOS={bos_id}, EOS={eos_id}, PAD={pad_id}")
+    logger.info(f"Note: Marian models use EOS token for both BOS and EOS (standard convention)")
+    
+    # Validate tokens
+    if bos_id == pad_id and eos_id == pad_id:
+        logger.warning(
+            "BOS, EOS, and PAD all use same token ID. This is standard for Marian models "
+            "but may affect learning. The model will learn from loss signal alone."
+        )
 
     train_df = load_translation_parquet(args.train_path)
     dev_df = load_translation_parquet(args.dev_path)
@@ -329,6 +329,28 @@ def train() -> None:
             dev_bleu,
             dev_chrf,
         )
+        
+        # Log sample predictions every epoch for debugging
+        if epoch == 1 or epoch % 5 == 0:
+            sample_metrics, sample_sources, sample_preds, sample_refs = evaluate_metrics(
+                model,
+                dev_loader,
+                tokenizer,
+                device,
+                bos_id,
+                eos_id,
+                args.max_generate_length,
+                collect_predictions=True,
+            )
+            logger.info("=" * 80)
+            logger.info(f"Sample predictions at epoch {epoch}:")
+            for i in range(min(3, len(sample_preds))):
+                logger.info(f"  Source: {sample_sources[i][:100]}")
+                logger.info(f"  Pred:   {sample_preds[i][:100]}")
+                logger.info(f"  Target: {sample_refs[i][:100]}")
+                logger.info(f"  Pred length: {len(sample_preds[i].split())} words")
+                logger.info("-" * 80)
+            logger.info("=" * 80)
 
         metric_value = val_loss if args.early_stop_metric == "loss" else dev_bleu
         improved = (

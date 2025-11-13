@@ -16,14 +16,36 @@ except ImportError:  # pragma: no cover - optional dependency
 
 
 def corpus_bleu(predictions: Sequence[str], references: Sequence[str]) -> float:
-    """Compute corpus-level BLEU using sacrebleu."""
+    """Compute corpus-level BLEU using sacrebleu.
+    
+    Note: sacrebleu expects references as List[List[str]] where outer list is examples
+    and inner list is alternative references.
+    """
+    # Validate inputs
+    if len(predictions) == 0 or len(references) == 0:
+        return 0.0
+    if len(predictions) != len(references):
+        raise ValueError(f"Prediction count ({len(predictions)}) != reference count ({len(references)})")
+    
+    # sacrebleu expects: predictions as List[str], references as List[List[str]]
     result = sacrebleu.corpus_bleu(predictions, [references])
     return float(result.score)
 
 
 def corpus_chrf(predictions: Sequence[str], references: Sequence[str], char_order: int = 6) -> float:
-    """Compute corpus-level chrF score."""
-    result = sacrebleu.corpus_chrf(predictions, references, char_order=char_order)
+    """Compute corpus-level chrF score.
+    
+    Note: sacrebleu expects references as List[List[str]] where outer list is examples
+    and inner list is alternative references.
+    """
+    # Validate inputs
+    if len(predictions) == 0 or len(references) == 0:
+        return 0.0
+    if len(predictions) != len(references):
+        raise ValueError(f"Prediction count ({len(predictions)}) != reference count ({len(references)})")
+    
+    # sacrebleu expects: predictions as List[str], references as List[List[str]]
+    result = sacrebleu.corpus_chrf(predictions, [references], char_order=char_order)
     return float(result.score)
 
 

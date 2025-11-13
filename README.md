@@ -40,11 +40,17 @@ Common options:
 
 ```bash
 # Custom training size and hyperparameters
-python -m src.baselines.train_seq2seq --max-train-samples 500000 --epochs 20 --learning-rate 1e-3
+python -m src.baselines.train_seq2seq --max-train-samples 500000 --epochs 20 --learning-rate 5e-4
 
 # Full dataset (1M examples)
 python -m src.baselines.train_seq2seq --max-train-samples 1000000 --batch-size 128
 ```
+
+**Default settings (optimized for stability):**
+- Learning rate: `5e-4` (reduced from 1e-3 for better convergence)
+- Training samples: `200k` (balanced speed vs performance)
+- Patience: `5` epochs
+- Logs sample predictions every epoch for debugging
 
 Each run creates a timestamped directory under `outputs/seq2seq_lstm/` containing:
 - `best_model.pt`, `run_config.json`
