@@ -80,6 +80,35 @@ def build_dataloader(
     )
 
 
+def resolve_special_token_id(
+    tokenizer,
+    attr_candidates: Sequence[str],
+    token_attr_candidates: Sequence[str],
+    literal_tokens: Sequence[str],
+) -> Optional[int]:
+    for attr in attr_candidates:
+        value = getattr(tokenizer, attr, None)
+        if value is not None:
+            return value
+
+    vocab = None
+    for token_attr in token_attr_candidates:
+        token = getattr(tokenizer, token_attr, None)
+        if token:
+            if vocab is None:
+                vocab = tokenizer.get_vocab()
+            if token in vocab:
+                return tokenizer.convert_tokens_to_ids(token)
+
+    if literal_tokens:
+        if vocab is None:
+            vocab = tokenizer.get_vocab()
+        for token in literal_tokens:
+            if token in vocab:
+                return tokenizer.convert_tokens_to_ids(token)
+    return None
+
+
 def train() -> None:
     args = parse_args()
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -95,14 +124,26 @@ def train() -> None:
         json.dump(vars(args), fh, indent=2)
 
     tokenizer = ensure_tokenizer(force_download=args.force_download_tokenizer)
-    pad_id = tokenizer.pad_token_id
-    if pad_id is None:
+    pad_id_value = tokenizer.pad_token_id
+    if not isinstance(pad_id_value, int):
         raise ValueError("Tokenizer is missing a pad token id.")
 
-    bos_id = tokenizer.bos_token_id or tokenizer.cls_token_id or tokenizer.eos_token_id
-    eos_id = tokenizer.eos_token_id or tokenizer.sep_token_id
-    if bos_id is None or eos_id is None:
+    bos_id = resolve_special_token_id(
+        tokenizer,
+        ["bos_token_id", "cls_token_id", "eos_token_id", "pad_token_id"],
+        ["bos_token", "cls_token", "eos_token", "pad_token"],
+        ["<s>", "</s>", "<pad>"],
+    )
+    eos_id = resolve_special_token_id(
+        tokenizer,
+        ["eos_token_id", "sep_token_id", "pad_token_id"],
+        ["eos_token", "sep_token", "pad_token"],
+        ["</s>", "<pad>"],
+    )
+    if not isinstance(bos_id, int) or not isinstance(eos_id, int):
         raise ValueError("Tokenizer must provide BOS and EOS token ids.")
+    pad_id = pad_id_value
+    logger.info("Using BOS token id %s and EOS token id %s", bos_id, eos_id)
 
     train_df = load_translation_parquet(args.train_path)
     dev_df = load_translation_parquet(args.dev_path)
@@ -147,8 +188,12 @@ def train() -> None:
     else:
         logger.warning(f"Test path `{args.test_path}` not found. Final evaluation on test will be skipped.")
 
+    vocab_size_value = getattr(tokenizer, "vocab_size", None)
+    if not isinstance(vocab_size_value, int):
+        vocab_size_value = len(tokenizer.get_vocab())
+
     config = Seq2SeqConfig(
-        vocab_size=tokenizer.vocab_size,
+        vocab_size=vocab_size_value,
         embedding_dim=args.embedding_dim,
         hidden_dim=args.hidden_dim,
         num_layers=args.num_layers,
@@ -312,6 +357,7 @@ def run_epoch(
     model.train()
     total_loss = 0.0
     total_tokens = 0
+    ignore_index = int(getattr(criterion, "ignore_index", -100))
 
     for batch in dataloader:
         batch = move_batch_to_device(batch, device)
@@ -327,7 +373,8 @@ def run_epoch(
         scaler.step(optimizer)
         scaler.update()
 
-        tokens = (batch.decoder_target_ids != criterion.ignore_index).sum().item()
+        mask = batch.decoder_target_ids != ignore_index
+        tokens = torch.count_nonzero(mask).item()
         total_loss += loss.item() * tokens
         total_tokens += tokens
 
@@ -344,12 +391,14 @@ def evaluate_loss(
     model.eval()
     total_loss = 0.0
     total_tokens = 0
+    ignore_index = int(getattr(criterion, "ignore_index", -100))
 
     for batch in dataloader:
         batch = move_batch_to_device(batch, device)
         logits = model(batch.source_ids, batch.source_lengths, batch.decoder_input_ids)
         loss = criterion(logits.reshape(-1, logits.size(-1)), batch.decoder_target_ids.reshape(-1))
-        tokens = (batch.decoder_target_ids != criterion.ignore_index).sum().item()
+        mask = batch.decoder_target_ids != ignore_index
+        tokens = torch.count_nonzero(mask).item()
         total_loss += loss.item() * tokens
         total_tokens += tokens
 

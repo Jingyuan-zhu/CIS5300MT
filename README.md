@@ -26,7 +26,7 @@ python -m src.baselines.dictionary_baseline \
 
 Provide a bilingual lexicon (`json`, `csv`, `tsv`, or `xml`) via `--dictionary`. XML dictionaries with `<w><c>EN</c><d>ES</d></w>` entries are supported directly; for other formats, ensure there are two columns (`source`, `target`) without headers.
 Current Lexicon: from `https://github.com/mananoreboton/en-es-en-Dic`
-Timestamped prediction files are stored under `outputs/dictionary_baseline/`, with logs in `logs/dictionary_baseline/`.
+Each run writes timestamped prediction files under `outputs/dictionary_baseline/` and a matching log under `logs/dictionary_baseline/`.
 
 ### Seq2Seq LSTM Baseline
 
@@ -48,7 +48,7 @@ python -m src.baselines.train_seq2seq \
   --early-stop-metric bleu
 ```
 
-The script trains on `train_set`, tracks both loss and BLEU on `dev_set`, and supports early stopping on either metric. Artifacts are written to `outputs/seq2seq_lstm/<timestamp>/`:
+The script trains on `train_set`, tracks both loss and BLEU on `dev_set`, and supports early stopping on either metric. Each run creates a timestamped directory under `outputs/seq2seq_lstm/` containing:
 - `best_model.pt`
 - `run_config.json`, `dev_metrics_<timestamp>.json`
 - `test_predictions_<timestamp>.parquet`, `test_metrics_<timestamp>.json`
@@ -59,12 +59,23 @@ The script trains on `train_set`, tracks both loss and BLEU on `dev_set`, and su
 Evaluate any predictions file that contains `source`, `prediction`, and `target` columns:
 
 ```bash
+DICT_TS=$(ls outputs/dictionary_baseline | sort | tail -n1 | sed 's/predictions_//; s/\\.parquet//')
 python -m src.evaluation.run_evaluation \
-  --predictions outputs/dictionary_baseline/predictions_<timestamp>.parquet \
+  --predictions outputs/dictionary_baseline/predictions_${DICT_TS}.parquet \
   --metrics bleu chrf comet \
   --comet-num-workers 1 \
   --comet-gpus 0 \
-  --report outputs/dictionary_metrics.json
+  --report outputs/dictionary_baseline/metrics_${DICT_TS}.json
+```
+
+```bash
+SEQ_TS=$(ls outputs/seq2seq_lstm | sort | tail -n1)
+python -m src.evaluation.run_evaluation \
+  --predictions outputs/seq2seq_lstm/${SEQ_TS}/test_predictions_${SEQ_TS}.parquet \
+  --metrics bleu chrf comet \
+  --comet-num-workers 1 \
+  --comet-gpus 0 \
+  --report outputs/seq2seq_lstm/${SEQ_TS}/test_metrics_eval.json
 ```
 
 Increase `--comet-num-workers` and set `--comet-gpus` when running on CUDA.
