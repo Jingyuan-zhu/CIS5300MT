@@ -21,7 +21,7 @@ class Seq2SeqConfig:
 
 
 class Seq2SeqLSTM(nn.Module):
-    """A simple encoder-decoder LSTM with tied embeddings."""
+    """Simple unidirectional encoder-decoder LSTM baseline."""
 
     def __init__(self, config: Seq2SeqConfig) -> None:
         super().__init__()
@@ -55,7 +55,7 @@ class Seq2SeqLSTM(nn.Module):
         nn.init.uniform_(self.output_projection.weight, -0.1, 0.1)
         nn.init.zeros_(self.output_projection.bias)
 
-    def encode(self, source_ids: torch.Tensor, source_lengths: torch.Tensor) -> Tuple[Tuple[torch.Tensor, torch.Tensor], torch.Tensor]:
+    def encode(self, source_ids: torch.Tensor, source_lengths: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         embedded = self.dropout(self.embedding(source_ids))
         packed = pack_padded_sequence(embedded, source_lengths.cpu(), batch_first=True, enforce_sorted=False)
         packed_outputs, hidden = self.encoder(packed)

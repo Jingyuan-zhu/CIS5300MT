@@ -13,45 +13,59 @@ import torch
 from torch.cuda.amp import GradScaler, autocast
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from src.baselines.seq2seq_lstm import Seq2SeqConfig, Seq2SeqLSTM
 from src.data.translation_dataset import SequenceBatch, TranslationDataset, collate_translation_batch
 from src.evaluation.metrics import corpus_bleu, corpus_chrf
 from src.tokenizers import ensure_tokenizer
+from src.utils.auto_config import auto_configure, print_hardware_info
 from src.utils.data import load_translation_parquet, make_parallel_corpus
 from src.utils.logging import setup_logger
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train an LSTM seq2seq translation baseline.")
-    parser.add_argument("--train-path", default="data/train_set.parquet", help="Training parquet file.")
-    parser.add_argument("--dev-path", default="data/dev_set.parquet", help="Development parquet file.")
-    parser.add_argument("--test-path", default="data/test_set.parquet", help="Test parquet file for final evaluation.")
-    parser.add_argument("--output-root", default="outputs/seq2seq_lstm", help="Root directory for run artifacts.")
-    parser.add_argument("--max-source-length", type=int, default=128)
-    parser.add_argument("--max-target-length", type=int, default=128)
-    parser.add_argument("--batch-size", type=int, default=128)
-    parser.add_argument("--eval-batch-size", type=int, default=128)
-    parser.add_argument("--epochs", type=int, default=20)
-    parser.add_argument("--learning-rate", type=float, default=5e-4)
-    parser.add_argument("--weight-decay", type=float, default=0.0)
-    parser.add_argument("--dropout", type=float, default=0.2)
-    parser.add_argument("--embedding-dim", type=int, default=512)
-    parser.add_argument("--hidden-dim", type=int, default=512)
-    parser.add_argument("--num-layers", type=int, default=2)
-    parser.add_argument("--patience", type=int, default=4, help="Early stopping patience.")
-    parser.add_argument("--grad-clip", type=float, default=1.0)
-    parser.add_argument("--num-workers", type=int, default=4)
-    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--mixed-precision", action="store_true", help="Enable torch.cuda.amp mixed precision.")
-    parser.add_argument("--force-download-tokenizer", action="store_true")
-    parser.add_argument("--max-generate-length", type=int, default=128, help="Maximum tokens for generation.")
-    parser.add_argument(
-        "--early-stop-metric",
-        choices=["loss", "bleu"],
-        default="loss",
-        help="Metric to monitor for early stopping and checkpointing.",
+    parser = argparse.ArgumentParser(
+        description="Train a simple LSTM seq2seq baseline with auto-config.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
+    # Common training parameters
+    parser.add_argument("--epochs", type=int, default=20, help="Number of training epochs")
+    parser.add_argument("--learning-rate", type=float, default=1e-3, help="Learning rate")
+    parser.add_argument("--patience", type=int, default=3, help="Early stopping patience")
+    parser.add_argument("--batch-size", type=int, default=None, help="Batch size (auto if None)")
+    parser.add_argument("--eval-batch-size", type=int, default=None, help="Eval batch size (auto if None)")
+    
+    # Data paths
+    parser.add_argument("--train-path", default="data/train_set.parquet", help="Training data")
+    parser.add_argument("--dev-path", default="data/dev_set.parquet", help="Dev data")
+    parser.add_argument("--test-path", default="data/test_set.parquet", help="Test data")
+    parser.add_argument("--output-root", default="outputs/seq2seq_lstm", help="Output directory")
+    
+    # Model architecture
+    parser.add_argument("--embedding-dim", type=int, default=512, help="Embedding dimension")
+    parser.add_argument("--hidden-dim", type=int, default=512, help="Hidden dimension")
+    parser.add_argument("--num-layers", type=int, default=2, help="Number of LSTM layers")
+    parser.add_argument("--dropout", type=float, default=0.2, help="Dropout rate")
+    
+    # Auto-config and hardware
+    parser.add_argument("--auto-config", action="store_true", help="Auto-detect optimal hardware settings")
+    parser.add_argument("--model-size", choices=["small", "medium", "large"], default="medium",
+                       help="Model size for auto-config batch sizing")
+    parser.add_argument("--device", default=None, help="Device (cuda/cpu, auto if None)")
+    parser.add_argument("--num-workers", type=int, default=None, help="DataLoader workers (auto if None)")
+    parser.add_argument("--mixed-precision", action="store_true", default=None, help="Use mixed precision")
+    
+    # Other settings
+    parser.add_argument("--max-source-length", type=int, default=128, help="Max source sequence length")
+    parser.add_argument("--max-target-length", type=int, default=128, help="Max target sequence length")
+    parser.add_argument("--max-generate-length", type=int, default=128, help="Max generation length")
+    parser.add_argument("--early-stop-metric", choices=["loss", "bleu"], default="loss",
+                       help="Metric for early stopping")
+    parser.add_argument("--weight-decay", type=float, default=0.0, help="Weight decay")
+    parser.add_argument("--grad-clip", type=float, default=1.0, help="Gradient clipping")
+    parser.add_argument("--force-download-tokenizer", action="store_true", help="Force re-download tokenizer")
+    
     return parser.parse_args()
 
 
@@ -111,6 +125,33 @@ def resolve_special_token_id(
 
 def train() -> None:
     args = parse_args()
+    
+    # Apply auto-config if enabled or if hardware params not specified
+    if args.auto_config or args.device is None:
+        auto_cfg = auto_configure(device=args.device, model_size=args.model_size)
+        if args.device is None:
+            args.device = auto_cfg["device"]
+        if args.batch_size is None:
+            args.batch_size = auto_cfg["batch_size"]
+        if args.eval_batch_size is None:
+            args.eval_batch_size = auto_cfg["eval_batch_size"]
+        if args.num_workers is None:
+            args.num_workers = auto_cfg["num_workers"]
+        if args.mixed_precision is None:
+            args.mixed_precision = auto_cfg["mixed_precision"]
+    
+    # Set defaults if still None
+    if args.batch_size is None:
+        args.batch_size = 64
+    if args.eval_batch_size is None:
+        args.eval_batch_size = 64
+    if args.num_workers is None:
+        args.num_workers = 4
+    if args.device is None:
+        args.device = "cuda" if torch.cuda.is_available() else "cpu"
+    if args.mixed_precision is None:
+        args.mixed_precision = False
+    
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     run_dir = Path(args.output_root) / timestamp
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -118,6 +159,14 @@ def train() -> None:
     logger = setup_logger("seq2seq_lstm", Path("logs/seq2seq_lstm"), timestamp)
     logger.info("Starting seq2seq baseline training run.")
     logger.info(f"Run artifacts will be saved to: {run_dir}")
+    
+    # Print hardware info
+    print("\n" + "="*60)
+    print_hardware_info()
+    logger.info(f"Using device: {args.device}")
+    logger.info(f"Batch size: {args.batch_size} | Eval batch size: {args.eval_batch_size}")
+    logger.info(f"Num workers: {args.num_workers} | Mixed precision: {args.mixed_precision}")
+    print("="*60 + "\n")
 
     config_path = run_dir / "run_config.json"
     with config_path.open("w", encoding="utf-8") as fh:
@@ -359,7 +408,8 @@ def run_epoch(
     total_tokens = 0
     ignore_index = int(getattr(criterion, "ignore_index", -100))
 
-    for batch in dataloader:
+    pbar = tqdm(dataloader, desc="Training", leave=False)
+    for batch in pbar:
         batch = move_batch_to_device(batch, device)
         optimizer.zero_grad(set_to_none=True)
         with autocast(enabled=mixed_precision):
@@ -377,6 +427,8 @@ def run_epoch(
         tokens = torch.count_nonzero(mask).item()
         total_loss += loss.item() * tokens
         total_tokens += tokens
+        
+        pbar.set_postfix({"loss": f"{total_loss / max(total_tokens, 1):.4f}"})
 
     return total_loss / max(total_tokens, 1)
 
@@ -393,7 +445,8 @@ def evaluate_loss(
     total_tokens = 0
     ignore_index = int(getattr(criterion, "ignore_index", -100))
 
-    for batch in dataloader:
+    pbar = tqdm(dataloader, desc="Evaluating loss", leave=False)
+    for batch in pbar:
         batch = move_batch_to_device(batch, device)
         logits = model(batch.source_ids, batch.source_lengths, batch.decoder_input_ids)
         loss = criterion(logits.reshape(-1, logits.size(-1)), batch.decoder_target_ids.reshape(-1))
@@ -420,7 +473,8 @@ def evaluate_metrics(
     references = []
     sources = []
 
-    for batch in dataloader:
+    pbar = tqdm(dataloader, desc="Generating predictions", leave=False)
+    for batch in pbar:
         source_ids = batch.source_ids.to(device)
         source_lengths = batch.source_lengths.to(device)
         generated = model.greedy_decode(

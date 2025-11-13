@@ -30,29 +30,19 @@ Each run writes timestamped prediction files under `outputs/dictionary_baseline/
 
 ### Seq2Seq LSTM Baseline
 
-The LSTM uses the Helsinki-NLP tokenizer to stay aligned with transformer models. Download the tokenizer (stored under `artifacts/tokenizers/opus_mt_en_es`) and train:
+Simple unidirectional LSTM baseline with Helsinki-NLP tokenizer. Hardware settings auto-configure:
 
 ```bash
-python -m src.baselines.train_seq2seq \
-  --train-path data/train_set.parquet \
-  --dev-path data/dev_set.parquet \
-  --output-root outputs/seq2seq_lstm \
-  --device cuda \
-  --mixed-precision \
-  --batch-size 192 \
-  --eval-batch-size 192 \
-  --max-source-length 128 \
-  --max-target-length 128 \
-  --num-workers 8 \
-  --test-path data/test_set.parquet \
-  --early-stop-metric bleu
+python -m src.baselines.train_seq2seq --auto-config
 ```
 
-The script trains on `train_set`, tracks both loss and BLEU on `dev_set`, and supports early stopping on either metric. Each run creates a timestamped directory under `outputs/seq2seq_lstm/` containing:
-- `best_model.pt`
-- `run_config.json`, `dev_metrics_<timestamp>.json`
-- `test_predictions_<timestamp>.parquet`, `test_metrics_<timestamp>.json`
-- Logs stored in `logs/seq2seq_lstm/<timestamp>.log`
+Common options (all optional, sensible defaults provided):
+
+```bash
+python -m src.baselines.train_seq2seq --epochs 20 --learning-rate 1e-3 --batch-size 128
+```
+
+Each run creates a timestamped directory under `outputs/seq2seq_lstm/` with model, metrics, predictions, and logs.
 
 ## Evaluation
 
