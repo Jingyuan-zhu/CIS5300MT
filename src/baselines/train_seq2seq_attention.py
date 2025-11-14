@@ -50,7 +50,7 @@ def parse_args() -> argparse.Namespace:
     # Common training parameters
     parser.add_argument("--epochs", type=int, default=20, help="Number of training epochs")
     parser.add_argument("--learning-rate", type=float, default=5e-4, help="Learning rate (reduced for stability)")
-    parser.add_argument("--patience", type=int, default=3, help="Early stopping patience")
+    parser.add_argument("--patience", type=int, default=2, help="Early stopping patience")
     parser.add_argument("--batch-size", type=int, default=None, help="Batch size (auto if None)")
     parser.add_argument("--eval-batch-size", type=int, default=None, help="Eval batch size (auto if None)")
     parser.add_argument("--max-train-samples", type=int, default=200000, 
