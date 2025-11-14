@@ -148,7 +148,7 @@ def main():
         "--predictions", str(predictions_path),
         "--metrics", "bleu", "chrf", "comet",
         "--comet-num-workers", "1",
-        "--comet-gpus", "0" if args.device == "cuda" else "-1",
+        "--comet-gpus", "1" if args.device == "cuda" else "-1",
         "--report", str(metrics_path),
     ]
     
