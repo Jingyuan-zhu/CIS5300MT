@@ -45,8 +45,15 @@ python -m src.baselines.train_seq2seq_attention --auto-config
 ```
 
 
-#### 3. Pretrained Helsinki-NLP (Upper Bound)
-Direct evaluation of pretrained `opus-mt-en-es` model - our target performance anchor.
+#### 3. LSTM + Attention + Frozen HF Embeddings
+Same architecture as #2 but swaps in the `Helsinki-NLP/opus-mt-en-es` tokenizer + embedding matrix (frozen) so training focuses on the encoder/decoder/attention layers. Useful to see the lift from pretrained lexical representations without paying full transformer cost.
+
+```bash
+python -m src.baselines.train_seq2seq_attention_hf --auto-config
+```
+
+#### 4. Pretrained Helsinki-NLP (Upper Bound)
+Direct evaluation of pretrained `opus-mt-en-es` model – our target performance anchor.
 
 ```bash
 python -m src.models.run_hf_baseline
