@@ -28,40 +28,65 @@ Provide a bilingual lexicon (`json`, `csv`, `tsv`, or `xml`) via `--dictionary`.
 Current Lexicon: from `https://github.com/mananoreboton/en-es-en-Dic`
 Each run writes timestamped prediction files under `outputs/dictionary_baseline/` and a matching log under `logs/dictionary_baseline/`.
 
-### Seq2Seq LSTM Baseline
+### Seq2Seq LSTM Baselines
 
-Simple unidirectional LSTM baseline with Helsinki-NLP tokenizer. Auto-configures hardware and uses 200k samples by default for fair comparison:
+#### 1. Simple LSTM (Vanilla)
+Unidirectional encoder-decoder without attention. Fast but limited performance (~BLEU 5-8).
 
 ```bash
 python -m src.baselines.train_seq2seq --auto-config
 ```
 
-Common options:
+#### 2. LSTM + Bidirectional + Attention
+Bidirectional encoder with Bahdanau attention. Better performance (~BLEU 25-30).
+
+```bash
+python -m src.baselines.train_seq2seq_attention --auto-config
+```
+
+
+#### 3. Pretrained Helsinki-NLP (Upper Bound)
+Direct evaluation of pretrained `opus-mt-en-es` model - our target performance anchor.
+
+```bash
+python -m src.models.run_hf_baseline
+```
+
+
+---
+
+**Common training options:**
 
 ```bash
 # Custom training size and hyperparameters
-python -m src.baselines.train_seq2seq --max-train-samples 500000 --epochs 20 --learning-rate 5e-4
+python -m src.baselines.train_seq2seq_attention --max-train-samples 500000 --epochs 20 --learning-rate 5e-4
 
 # Full dataset (1M examples)
-python -m src.baselines.train_seq2seq --max-train-samples 1000000 --batch-size 128
+python -m src.baselines.train_seq2seq_attention --max-train-samples 1000000 --batch-size 128
 ```
 
 **Default settings (optimized for stability):**
-- Learning rate: `5e-4` (reduced from 1e-3 for better convergence)
+- Learning rate: `5e-4` (reduced for better convergence)
 - Training samples: `200k` (balanced speed vs performance)
-- Patience: `5` epochs
-- Logs sample predictions every epoch for debugging
+- Patience: `3` epochs
+- Logs sample predictions at epochs 1, 5, 10, 15, 20
 
-Each run creates a timestamped directory under `outputs/seq2seq_lstm/` containing:
+Each run creates a timestamped directory under `outputs/seq2seq_*/` containing:
 - `best_model.pt`, `run_config.json`
 - `training_history_<timestamp>.csv` and `.png` (training curves)
 - `dev_metrics_<timestamp>.json`, `test_predictions_<timestamp>.parquet`, `test_metrics_<timestamp>.json`
-- Logs in `logs/seq2seq_lstm/<timestamp>.log`
+- Logs in `logs/seq2seq_*/<timestamp>.log`
 
 **Plot training history manually:**
 
 ```bash
 python -m src.utils.plot_training outputs/seq2seq_lstm/<timestamp>/training_history_<timestamp>.csv
+```
+
+**Inspect predictions:**
+
+```bash
+python -m src.utils.inspect_predictions outputs/seq2seq_lstm/<timestamp>/test_predictions_<timestamp>.parquet
 ```
 
 ## Evaluation
