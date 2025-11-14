@@ -365,7 +365,7 @@ def run_eval_metrics(run_dir: Path, predictions_path: Path, device: str) -> None
         "--comet-num-workers",
         "1",
         "--comet-gpus",
-        "0" if device.startswith("cuda") else "-1",
+        "1" if device.startswith("cuda") else "-1",
         "--report",
         str(metrics_path),
     ]
