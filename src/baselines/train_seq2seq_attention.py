@@ -398,12 +398,32 @@ def train_attention() -> None:
             }
         )
         test_predictions_path = run_dir / f"test_predictions_{timestamp}.parquet"
-        test_metrics_path = run_dir / f"test_metrics_{timestamp}.json"
         predictions_df.to_parquet(test_predictions_path, index=False)
-        with test_metrics_path.open("w", encoding="utf-8") as fh:
-            json.dump(test_metrics, fh, indent=2)
-        logger.info("Test metrics: %s", test_metrics)
         logger.info("Saved test predictions to %s", test_predictions_path)
+        
+        # Run comprehensive evaluation including COMET
+        logger.info("Running comprehensive evaluation (BLEU, chrF, COMET)...")
+        import subprocess
+        test_metrics_path = run_dir / f"test_metrics_{timestamp}.json"
+        eval_cmd = [
+            "python", "-m", "src.evaluation.run_evaluation",
+            "--predictions", str(test_predictions_path),
+            "--metrics", "bleu", "chrf", "comet",
+            "--comet-num-workers", "1",
+            "--comet-gpus", "0" if args.device == "cuda" else "-1",
+            "--report", str(test_metrics_path),
+        ]
+        
+        try:
+            subprocess.run(eval_cmd, check=True)
+            with test_metrics_path.open("r", encoding="utf-8") as fh:
+                test_metrics = json.load(fh)
+            logger.info("Test metrics (with COMET): %s", test_metrics)
+        except subprocess.CalledProcessError as e:
+            logger.warning(f"COMET evaluation failed: {e}, using basic metrics only")
+            with test_metrics_path.open("w", encoding="utf-8") as fh:
+                json.dump(test_metrics, fh, indent=2)
+            logger.info("Test metrics (BLEU/chrF only): %s", test_metrics)
     else:
         logger.info("No test loader provided; skipping final evaluation.")
 

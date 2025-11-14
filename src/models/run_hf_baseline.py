@@ -16,7 +16,6 @@ import torch
 from tqdm import tqdm
 from transformers import MarianMTModel, MarianTokenizer
 
-from src.evaluation.metrics import corpus_bleu, corpus_chrf
 from src.utils.data import load_translation_parquet, make_parallel_corpus
 from src.utils.logging import setup_logger
 
@@ -118,23 +117,7 @@ def main():
         args.device,
     )
     
-    # Evaluate
-    logger.info("Computing metrics...")
-    bleu = corpus_bleu(predictions, references)
-    chrf = corpus_chrf(predictions, references)
-    
-    metrics = {
-        "bleu": bleu,
-        "chrf": chrf,
-        "model": args.model_name,
-        "test_size": len(predictions),
-        "timestamp": timestamp,
-    }
-    
-    logger.info(f"BLEU: {bleu:.4f}")
-    logger.info(f"CHRF: {chrf:.4f}")
-    
-    # Save results
+    # Save predictions
     predictions_df = pd.DataFrame({
         "source": sources,
         "prediction": predictions,
@@ -142,14 +125,8 @@ def main():
     })
     
     predictions_path = output_dir / f"predictions_{timestamp}.parquet"
-    metrics_path = output_dir / f"metrics_{timestamp}.json"
-    
     predictions_df.to_parquet(predictions_path, index=False)
-    with metrics_path.open("w") as f:
-        json.dump(metrics, f, indent=2)
-    
     logger.info(f"Saved predictions to {predictions_path}")
-    logger.info(f"Saved metrics to {metrics_path}")
     
     # Print sample predictions
     logger.info("\n" + "=" * 80)
@@ -161,14 +138,51 @@ def main():
         logger.info(f"  Target: {references[i][:100]}")
     logger.info("=" * 80)
     
-    logger.info("HF baseline evaluation complete!")
+    # Use comprehensive evaluation script (includes BLEU, chrF, COMET)
+    logger.info("\nRunning comprehensive evaluation (BLEU, chrF, COMET)...")
+    import subprocess
     
-    print(f"\n{'='*60}")
-    print(f"Helsinki-NLP/opus-mt-en-es Results:")
-    print(f"  BLEU:  {bleu:.4f}")
-    print(f"  CHRF:  {chrf:.4f}")
-    print(f"  Model: {args.model_name}")
-    print(f"{'='*60}\n")
+    metrics_path = output_dir / f"metrics_{timestamp}.json"
+    eval_cmd = [
+        "python", "-m", "src.evaluation.run_evaluation",
+        "--predictions", str(predictions_path),
+        "--metrics", "bleu", "chrf", "comet",
+        "--comet-num-workers", "1",
+        "--comet-gpus", "0" if args.device == "cuda" else "-1",
+        "--report", str(metrics_path),
+    ]
+    
+    try:
+        subprocess.run(eval_cmd, check=True)
+        logger.info(f"Saved comprehensive metrics to {metrics_path}")
+        
+        # Load and display metrics
+        with metrics_path.open("r") as f:
+            metrics = json.load(f)
+        
+        logger.info("HF baseline evaluation complete!")
+        
+        print(f"\n{'='*60}")
+        print(f"Helsinki-NLP/opus-mt-en-es Results:")
+        print(f"  BLEU:  {metrics.get('bleu', 'N/A'):.4f}" if isinstance(metrics.get('bleu'), (int, float)) else f"  BLEU:  {metrics.get('bleu', 'N/A')}")
+        print(f"  CHRF:  {metrics.get('chrf', 'N/A'):.4f}" if isinstance(metrics.get('chrf'), (int, float)) else f"  CHRF:  {metrics.get('chrf', 'N/A')}")
+        print(f"  COMET: {metrics.get('comet', 'N/A'):.4f}" if isinstance(metrics.get('comet'), (int, float)) else f"  COMET: {metrics.get('comet', 'N/A')}")
+        print(f"  Model: {args.model_name}")
+        print(f"{'='*60}\n")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Evaluation script failed: {e}")
+        logger.info("Falling back to basic metrics...")
+        from src.evaluation.metrics import corpus_bleu, corpus_chrf
+        bleu = corpus_bleu(predictions, references)
+        chrf = corpus_chrf(predictions, references)
+        metrics = {"bleu": bleu, "chrf": chrf, "model": args.model_name, "timestamp": timestamp}
+        with metrics_path.open("w") as f:
+            json.dump(metrics, f, indent=2)
+        print(f"\n{'='*60}")
+        print(f"Helsinki-NLP/opus-mt-en-es Results (without COMET):")
+        print(f"  BLEU:  {bleu:.4f}")
+        print(f"  CHRF:  {chrf:.4f}")
+        print(f"{'='*60}\n")
 
 
 if __name__ == "__main__":
