@@ -80,10 +80,14 @@ def compute_metrics(args: argparse.Namespace) -> Dict[str, float]:
     if "chrf" in args.metrics:
         scores["chrf"] = corpus_chrf(predictions, references)
     if "comet" in args.metrics:
+        # Force GPU 0 explicitly using devices parameter (PyTorch Lightning 2.x)
+        # If gpus > 0, use devices=[0] to ensure only GPU 0 is used
+        devices = [0] if args.comet_gpus > 0 else None
         config = CometConfig(
             model_name=args.comet_model,
             batch_size=args.comet_batch_size,
             gpus=args.comet_gpus,
+            devices=devices,  # Explicitly set to GPU 0
             num_workers=args.comet_num_workers,
         )
         scores["comet"] = comet_score(sources, predictions, references, config=config)

@@ -62,7 +62,15 @@ def collate_translation_batch(
     batch: Sequence[Dict[str, torch.Tensor]],
     pad_token_id: int,
 ) -> SequenceBatch:
-    """Pad and assemble a batch for training."""
+    """Pad and assemble a batch for training.
+    
+    For Marian tokenizers, BOS and EOS are the same token (typically 0).
+    The tokenizer only adds EOS at the end, so we need to prepend BOS to decoder_input.
+    
+    Target format from tokenizer: [token1, token2, ..., tokenN, EOS]
+    Decoder input should be: [BOS, token1, token2, ..., tokenN]  
+    Decoder target should be: [token1, token2, ..., tokenN, EOS]
+    """
     source_sequences = [item["source_ids"] for item in batch]
     target_sequences = [item["target_ids"] for item in batch]
     source_texts = [item["source_text"] for item in batch]
@@ -71,8 +79,32 @@ def collate_translation_batch(
     source_padded, source_lengths = _pad_sequences(source_sequences, pad_token_id)
     target_padded, _ = _pad_sequences(target_sequences, pad_token_id)
 
-    decoder_input_ids = target_padded[:, :-1]
-    decoder_target_ids = target_padded[:, 1:]
+    # Check if target already starts with BOS (for backward compatibility)
+    # Marian tokenizers typically don't add BOS at start, only EOS at end
+    bos_token_id = 0  # Marian uses 0 for both BOS and EOS
+    first_tokens = target_padded[:, 0]
+    has_bos = (first_tokens == bos_token_id).all()
+    
+    if has_bos:
+        # Target already has BOS: [BOS, token1, ..., tokenN, EOS]
+        # decoder_input = [BOS, token1, ..., tokenN]
+        # decoder_target = [token1, ..., tokenN, EOS]
+        decoder_input_ids = target_padded[:, :-1]
+        decoder_target_ids = target_padded[:, 1:]
+    else:
+        # Target doesn't have BOS: [token1, ..., tokenN, EOS]
+        # decoder_input should be: [BOS, token1, ..., tokenN]
+        # decoder_target should be: [token1, ..., tokenN, EOS]
+        # 
+        # Teacher forcing: at step i, predict decoder_target[i] given decoder_input[:i+1]
+        # Step 0: predict token1 given [BOS] -> decoder_target[0] = token1
+        # Step 1: predict token2 given [BOS, token1] -> decoder_target[1] = token2
+        # Step N: predict EOS given [BOS, token1, ..., tokenN] -> decoder_target[N] = EOS
+        batch_size, seq_len = target_padded.shape
+        decoder_input_ids = torch.full((batch_size, seq_len), pad_token_id, dtype=torch.long)
+        decoder_input_ids[:, 0] = bos_token_id  # First token is BOS
+        decoder_input_ids[:, 1:] = target_padded[:, :-1]  # [token1, ..., tokenN] (exclude EOS)
+        decoder_target_ids = target_padded  # [token1, ..., tokenN, EOS] (full target)
 
     return SequenceBatch(
         source_ids=source_padded,
